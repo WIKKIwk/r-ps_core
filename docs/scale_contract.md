@@ -141,6 +141,22 @@ Production stream behavior:
 - Last parsed unit is reused when later frames do not include a unit.
 - Initial fallback unit defaults to lowercase configured unit, or `kg` if blank.
 
+## Serial Reader Runtime Contract
+
+Production serial reader behavior:
+
+- Opens the selected serial device with a read timeout.
+- Emits a serial reading when the port opens.
+- Reads chunks from the port and decodes frames with the serial stream decoder.
+- Keeps stream alive when a frame cannot be parsed.
+- Emits `open error: ...` when the port cannot be opened.
+- Emits `read error: ...` when an opened stream fails.
+- Reconnects after open/read failures.
+
+`rp-scale-read-serial` is the diagnostic CLI for this layer.
+
+It must read from the Rust PTY scale simulator without real hardware.
+
 ## Detection Contract
 
 Production detection behavior:

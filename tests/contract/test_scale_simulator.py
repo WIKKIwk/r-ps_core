@@ -86,6 +86,51 @@ class ScaleSimulatorTest(unittest.TestCase):
         self.assertTrue(any(frame.startswith("1.250 kg ST") for frame in frames), frames)
         self.assertGreaterEqual(count_repeated(frames, "1.250 kg ST"), 10)
 
+    def test_serial_reader_cli_reads_realtime_simulator_frames(self) -> None:
+        subprocess.run(["cargo", "build", "--quiet", "--bins"], cwd=ROOT, check=True)
+
+        simulator = subprocess.Popen(
+            [
+                str(ROOT / "target/debug/rp-scale-sim-scale"),
+                "--scenario",
+                "batch",
+                "--interval-ms",
+                "25",
+            ],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.addCleanup(stop_process, simulator)
+
+        assert simulator.stdout is not None
+        first_line = simulator.stdout.readline().strip()
+        device = first_line.removeprefix("device=")
+
+        result = subprocess.run(
+            [
+                str(ROOT / "target/debug/rp-scale-read-serial"),
+                device,
+                "9600",
+                "kg",
+                "80",
+                "6000",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=8,
+        )
+        lines = [line for line in result.stdout.splitlines() if "weight=" in line]
+
+        self.assertGreaterEqual(len(lines), 10, result.stdout)
+        self.assertTrue(any("weight=0.000" in line for line in lines), result.stdout)
+        self.assertTrue(any("stable=false" in line for line in lines), result.stdout)
+        self.assertTrue(any("stable=true" in line for line in lines), result.stdout)
+        self.assertTrue(any("raw=1.250 kg ST" in line for line in lines), result.stdout)
+
 
 def stop_process(process: subprocess.Popen[str]) -> None:
     try:
