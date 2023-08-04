@@ -70,6 +70,19 @@ Polygon returns `port="polygon://scale"`.
 
 These frames must parse through the same scale stream decoder contract.
 
+Important fact:
+
+- Current `polygon` code does not create a serial PTY device.
+- Production `scale` reads polygon through HTTP bridge fallback.
+- Real scale compatibility still requires direct serial port probing.
+
+`rp-scale` verifies direct serial compatibility with a pseudo-terminal test:
+
+- Python creates a PTY pair.
+- The simulator side writes `1.250 kg ST` to the master fd.
+- Rust opens the slave device path with `SerialPortProbe`.
+- The probe must return `parsed_weight=true` and `has_data=true`.
+
 ## Parser Contract
 
 Production regex:
