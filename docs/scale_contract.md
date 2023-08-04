@@ -1,0 +1,120 @@
+# Scale Logic Contract
+
+This document records the production behavior copied from `gscale-platform/scale`.
+
+Reference files:
+
+- `/Volumes/Samsung990P/gscale/gscale-platform/scale/parser.go`
+- `/Volumes/Samsung990P/gscale/gscale-platform/scale/serial_reader.go`
+- `/Volumes/Samsung990P/gscale/gscale-platform/scale/detect.go`
+- `/Volumes/Samsung990P/gscale/gscale-platform/scale/types.go`
+
+## Architecture Boundary
+
+Scale code must be split into driver/protocol and core layers.
+
+Driver/protocol layer owns:
+
+- Hardware connection.
+- Serial, USB, Wi-Fi, Bluetooth, or vendor SDK transport.
+- Frame splitting.
+- Device-specific byte parsing.
+- Device status/error mapping.
+- Capability export.
+
+Core layer owns:
+
+- Receiving normalized realtime readings.
+- Stable/live decision.
+- Print trigger decision.
+- Batch state transition.
+- API and bridge snapshots.
+
+Core must not depend on a specific hardware transport.
+
+The current production-compatible driver is serial scale.
+
+Future scale drivers must emit the same typed reading shape so core behavior does not change.
+
+## Driver Reading Shape
+
+Every scale driver should produce a typed reading containing:
+
+- Numeric weight.
+- Unit normalized for core use, preferably `kg`.
+- Stable flag when available.
+- Raw frame only for diagnostics or compatibility output.
+- Driver/source metadata.
+- Timestamp.
+- Error/status when no valid weight can be produced.
+
+The serial driver may preserve production raw-frame behavior for compatibility.
+
+## Parser Contract
+
+Production regex:
+
+```text
+(?i)([-+N]?)\s*(\d+(?:[.,]\d+)?)\s*(kg|g|lb|lbs|oz)?\s*([-+]?)
+```
+
+Behavior:
+
+- Unicode minus variants are normalized to `-`.
+- `N` prefix means negative.
+- `-` prefix or suffix means negative.
+- `+` prefix or suffix means positive.
+- Comma decimal separator is converted to dot.
+- Values outside `[-1000000, 1000000]` are rejected.
+- Missing unit falls back to the configured default unit.
+- Unit is lowercased.
+- Candidate score:
+  - explicit unit: `+80`
+  - explicit sign: `+40`
+  - negative sign: `+120`
+  - positive sign: `+10`
+- Highest score wins.
+- If scores are equal, later candidate in the frame wins.
+- `US` or `UNSTABLE` marker returns `stable=false`.
+- `ST` or `STABLE` marker returns `stable=true`.
+- Unstable marker is checked before stable marker.
+
+## Serial Frame Contract
+
+Production frame splitting:
+
+- Frame ends at first `\r` or `\n`.
+- Consecutive `\r` and `\n` bytes are consumed together.
+- Buffer without delimiter produces no frame.
+- Pending serial buffer keeps only the last `1024` bytes.
+
+## Stream Decode Contract
+
+Production stream behavior:
+
+- Empty frames before the first parsed value are ignored.
+- Empty frames after a parsed value emit weight `0.0`.
+- Parse misses emit a reading with raw frame and no weight.
+- Parse misses do not stop the stream.
+- Last parsed unit is reused when later frames do not include a unit.
+- Initial fallback unit defaults to lowercase configured unit, or `kg` if blank.
+
+## Detection Contract
+
+Production detection behavior:
+
+- Explicit `--device` wins and uses the first baud in the baud list.
+- Candidate order:
+  - `/dev/serial/by-id/*`, sorted, symlinks resolved when possible.
+  - `/dev/ttyUSB*`, sorted.
+  - `/dev/ttyACM*`, sorted.
+- Duplicate device paths are removed.
+- Probe opens each candidate for each baud.
+- If parsed weight is found, candidate is selected.
+- If any data is seen but no parsed weight, candidate is still selected.
+- Busy errors include:
+  - `resource busy`
+  - `device or resource busy`
+  - `permission denied`
+- If no candidate works but a busy error was seen, detection returns busy error.
+- Otherwise detection falls back to first candidate and first baud.
