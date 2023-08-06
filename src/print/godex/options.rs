@@ -9,6 +9,17 @@ pub struct LabelOptions {
 }
 
 impl LabelOptions {
+    pub fn default_pack() -> Self {
+        Self {
+            label_length_mm: 50,
+            label_gap_mm: 3,
+            label_width_mm: 50,
+            dpi: 203,
+            safe_margin_mm: 4.0,
+            qr_box_mm: 18.0,
+        }
+    }
+
     pub fn default_simple() -> Self {
         Self {
             label_length_mm: 25,
@@ -18,6 +29,29 @@ impl LabelOptions {
             safe_margin_mm: 0.0,
             qr_box_mm: 35.0,
         }
+    }
+
+    pub fn normalized_pack(mut self) -> Self {
+        let defaults = Self::default_pack();
+        if self.label_length_mm <= 0 {
+            self.label_length_mm = defaults.label_length_mm;
+        }
+        if self.label_gap_mm <= 0 {
+            self.label_gap_mm = defaults.label_gap_mm;
+        }
+        if self.label_width_mm <= 0 {
+            self.label_width_mm = defaults.label_width_mm;
+        }
+        if self.dpi <= 0 {
+            self.dpi = defaults.dpi;
+        }
+        if self.safe_margin_mm <= 0.0 {
+            self.safe_margin_mm = defaults.safe_margin_mm;
+        }
+        if self.qr_box_mm <= 0.0 {
+            self.qr_box_mm = defaults.qr_box_mm;
+        }
+        self
     }
 
     pub fn normalized_simple(mut self) -> Self {
@@ -64,6 +98,18 @@ mod tests {
         assert_eq!(options.label_width_mm, 50);
         assert_eq!(options.dpi, 203);
         assert_eq!(options.safe_margin_mm, 4.0);
+    }
+
+    #[test]
+    fn normalizes_pack_options_like_gscale() {
+        let options = LabelOptions::default().normalized_pack();
+
+        assert_eq!(options.label_length_mm, 50);
+        assert_eq!(options.label_gap_mm, 3);
+        assert_eq!(options.label_width_mm, 50);
+        assert_eq!(options.dpi, 203);
+        assert_eq!(options.safe_margin_mm, 4.0);
+        assert_eq!(options.qr_box_mm, 18.0);
     }
 
     #[test]
