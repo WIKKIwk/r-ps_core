@@ -1,32 +1,4 @@
-pub const DEFAULT_QR_BASE_URL: &str = "https://scan.wspace.sbs/L/";
-
-pub fn encode_scan_payload(
-    company_name: &str,
-    product_name: &str,
-    kg_text: &str,
-    brutto_text: &str,
-    epc: &str,
-) -> String {
-    let parts = [company_name, product_name, kg_text, brutto_text, epc]
-        .into_iter()
-        .map(query_escape)
-        .collect::<Vec<_>>();
-    DEFAULT_QR_BASE_URL.to_string() + &parts.join("/")
-}
-
-fn query_escape(value: &str) -> String {
-    let mut out = String::new();
-    for byte in value.as_bytes() {
-        match *byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(*byte as char);
-            }
-            b' ' => out.push('+'),
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
-}
+pub use crate::core::label::{DEFAULT_QR_BASE_URL, encode_scan_payload};
 
 #[cfg(test)]
 mod tests {
