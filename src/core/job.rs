@@ -66,7 +66,7 @@ impl CorePrintJob {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::print::core::selection::{PrintSelection, QuantitySource};
+    use crate::core::selection::{PrintSelection, QuantitySource};
 
     fn selection() -> PrintSelection {
         PrintSelection {

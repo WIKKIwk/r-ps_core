@@ -1,4 +1,3 @@
-pub mod core;
 pub mod epc;
 pub mod godex;
 pub mod mode;
