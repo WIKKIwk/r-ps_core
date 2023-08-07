@@ -1,7 +1,8 @@
 use std::fmt;
 
-use crate::core::CorePrintJob;
+use crate::core::{CorePrintJob, build_pack_label_content};
 
+use super::godex::{GodexPackRender, LabelOptions, build_pack_render};
 use super::mode::PrintMode;
 use super::printer::PrinterKind;
 use super::weight::format_print_weight_labels;
@@ -12,18 +13,17 @@ use super::zebra::{
 #[derive(Clone, Debug, PartialEq)]
 pub enum PrintCommand {
     ZebraZpl(String),
+    GodexPack(GodexPackRender),
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PrintAdapterError {
-    UnsupportedPrinter(String),
     BuildCommand(String),
 }
 
 impl fmt::Display for PrintAdapterError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnsupportedPrinter(printer) => write!(f, "{printer} print adapter unsupported"),
             Self::BuildCommand(error) => write!(f, "{error}"),
         }
     }
@@ -34,10 +34,17 @@ impl std::error::Error for PrintAdapterError {}
 pub fn build_print_command(job: CorePrintJob) -> Result<PrintCommand, PrintAdapterError> {
     match job.printer.unwrap_or(PrinterKind::Zebra) {
         PrinterKind::Zebra => build_zebra_command(job),
-        PrinterKind::Godex => Err(PrintAdapterError::UnsupportedPrinter(
-            "godex pack label".to_string(),
-        )),
+        PrinterKind::Godex => build_godex_command(job),
     }
+}
+
+fn build_godex_command(job: CorePrintJob) -> Result<PrintCommand, PrintAdapterError> {
+    let content =
+        build_pack_label_content(&job, "Accord", "5kg").map_err(PrintAdapterError::BuildCommand)?;
+    Ok(PrintCommand::GodexPack(build_pack_render(
+        &content,
+        LabelOptions::default_pack(),
+    )))
 }
 
 fn build_zebra_command(job: CorePrintJob) -> Result<PrintCommand, PrintAdapterError> {
@@ -96,10 +103,18 @@ mod tests {
         )
     }
 
+    fn unwrap_zebra(command: PrintCommand) -> String {
+        match command {
+            PrintCommand::ZebraZpl(command) => command,
+            PrintCommand::GodexPack(_) => panic!("expected zebra zpl command"),
+        }
+    }
+
     #[test]
     fn builds_zebra_rfid_command_from_core_job() {
-        let PrintCommand::ZebraZpl(command) =
-            build_print_command(job(PrintMode::Rfid, Some(PrinterKind::Zebra))).unwrap();
+        let command = unwrap_zebra(
+            build_print_command(job(PrintMode::Rfid, Some(PrinterKind::Zebra))).unwrap(),
+        );
 
         assert!(command.contains("^RS8,,,1,N"));
         assert!(command.contains("^RFW,H,,,A^FD3034257BF7194E406994036B^FS"));
@@ -110,8 +125,9 @@ mod tests {
 
     #[test]
     fn builds_zebra_label_only_command_from_core_job() {
-        let PrintCommand::ZebraZpl(command) =
-            build_print_command(job(PrintMode::LabelOnly, Some(PrinterKind::Zebra))).unwrap();
+        let command = unwrap_zebra(
+            build_print_command(job(PrintMode::LabelOnly, Some(PrinterKind::Zebra))).unwrap(),
+        );
 
         assert!(command.contains("^MMT"));
         assert!(!command.contains("^RFW"));
@@ -122,20 +138,29 @@ mod tests {
 
     #[test]
     fn defaults_missing_printer_to_zebra_like_gscale_backend() {
-        let PrintCommand::ZebraZpl(command) =
-            build_print_command(job(PrintMode::Rfid, None)).unwrap();
+        let command = unwrap_zebra(build_print_command(job(PrintMode::Rfid, None)).unwrap());
 
         assert!(command.contains("^RFW,H,,,A^FD3034257BF7194E406994036B^FS"));
     }
 
     #[test]
-    fn rejects_godex_until_pack_label_adapter_is_ported() {
-        let err =
-            build_print_command(job(PrintMode::LabelOnly, Some(PrinterKind::Godex))).unwrap_err();
+    fn builds_godex_pack_render_from_core_job() {
+        let PrintCommand::GodexPack(render) =
+            build_print_command(job(PrintMode::LabelOnly, Some(PrinterKind::Godex))).unwrap()
+        else {
+            panic!("expected godex pack render");
+        };
 
+        assert_eq!(render.commands[11], "Y0,0,TEXTLBL");
         assert_eq!(
-            err,
-            PrintAdapterError::UnsupportedPrinter("godex pack label".to_string())
+            render.commands[12],
+            "BA,0,24,1,2,42,0,0,3034257BF7194E406994036B"
         );
+        assert_eq!(render.commands[13], "Y224,224,QRLBL");
+        assert_eq!(
+            render.qr_payload,
+            "https://scan.wspace.sbs/L/ACCORD/GREEN+TEA/1.7/2.5/3034257BF7194E406994036B"
+        );
+        assert_eq!(render.qr_box_dots, 144);
     }
 }
