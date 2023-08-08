@@ -30,6 +30,29 @@ impl DiscoverySocketConfig {
             read_timeout: Duration::from_millis(250),
         }
     }
+
+    pub fn with_socket_targets(
+        bind_ip: Ipv4Addr,
+        discovery_port: u16,
+        announce_targets: Vec<SocketAddrV4>,
+    ) -> Self {
+        let port = if discovery_port == 0 {
+            DEFAULT_DISCOVERY_PORT
+        } else {
+            discovery_port
+        };
+        let announce_targets = if announce_targets.is_empty() {
+            normalize_announce_targets(Vec::new(), port)
+        } else {
+            dedupe_socket_targets(announce_targets)
+        };
+
+        Self {
+            bind_addr: SocketAddrV4::new(bind_ip, port),
+            announce_targets,
+            read_timeout: Duration::from_millis(250),
+        }
+    }
 }
 
 pub fn discovery_response_for_packet(
@@ -103,6 +126,19 @@ pub fn broadcast_targets_from_ipv4_networks(
     targets
 }
 
+pub fn collect_discovery_broadcast_targets(discovery_port: u16) -> Vec<SocketAddrV4> {
+    collect_interface_ipv4_networks()
+        .map(|networks| broadcast_targets_from_ipv4_networks(&networks, discovery_port))
+        .unwrap_or_else(|| {
+            let port = if discovery_port == 0 {
+                DEFAULT_DISCOVERY_PORT
+            } else {
+                discovery_port
+            };
+            vec![SocketAddrV4::new(Ipv4Addr::new(255, 255, 255, 255), port)]
+        })
+}
+
 fn normalize_announce_targets(
     announce_targets: Vec<Ipv4Addr>,
     discovery_port: u16,
@@ -122,6 +158,64 @@ fn normalize_announce_targets(
         }
     }
     out
+}
+
+fn dedupe_socket_targets(announce_targets: Vec<SocketAddrV4>) -> Vec<SocketAddrV4> {
+    let mut out = Vec::new();
+    for target in announce_targets {
+        if !out.contains(&target) {
+            out.push(target);
+        }
+    }
+    out
+}
+
+#[cfg(unix)]
+fn collect_interface_ipv4_networks() -> Option<Vec<(Ipv4Addr, Ipv4Addr)>> {
+    use std::ptr;
+
+    let mut addrs: *mut libc::ifaddrs = ptr::null_mut();
+    if unsafe { libc::getifaddrs(&mut addrs) } != 0 {
+        return None;
+    }
+
+    let mut out = Vec::new();
+    let mut cursor = addrs;
+    while !cursor.is_null() {
+        let iface = unsafe { &*cursor };
+        let flags = iface.ifa_flags as i32;
+        let is_up = flags & libc::IFF_UP != 0;
+        let is_loopback = flags & libc::IFF_LOOPBACK != 0;
+        if is_up
+            && !is_loopback
+            && let Some(ip) = sockaddr_ipv4(iface.ifa_addr)
+            && let Some(mask) = sockaddr_ipv4(iface.ifa_netmask)
+        {
+            out.push((ip, mask));
+        }
+        cursor = iface.ifa_next;
+    }
+
+    unsafe { libc::freeifaddrs(addrs) };
+    Some(out)
+}
+
+#[cfg(not(unix))]
+fn collect_interface_ipv4_networks() -> Option<Vec<(Ipv4Addr, Ipv4Addr)>> {
+    None
+}
+
+#[cfg(unix)]
+fn sockaddr_ipv4(addr: *const libc::sockaddr) -> Option<Ipv4Addr> {
+    if addr.is_null() {
+        return None;
+    }
+    let sockaddr = unsafe { &*addr };
+    if sockaddr.sa_family as i32 != libc::AF_INET {
+        return None;
+    }
+    let addr_in = unsafe { &*(addr as *const libc::sockaddr_in) };
+    Some(Ipv4Addr::from(addr_in.sin_addr.s_addr.to_ne_bytes()))
 }
 
 fn ipv4_broadcast(ip: Ipv4Addr, mask: Ipv4Addr) -> Ipv4Addr {
@@ -199,6 +293,26 @@ mod tests {
         assert_eq!(
             config.announce_targets,
             vec![SocketAddrV4::new(Ipv4Addr::new(255, 255, 255, 255), 18081)]
+        );
+    }
+
+    #[test]
+    fn socket_config_accepts_subnet_broadcast_targets() {
+        let config = DiscoverySocketConfig::with_socket_targets(
+            Ipv4Addr::UNSPECIFIED,
+            18081,
+            vec![
+                SocketAddrV4::new(Ipv4Addr::new(255, 255, 255, 255), 18081),
+                SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 255), 18081),
+                SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 255), 18081),
+            ],
+        );
+
+        assert_eq!(config.announce_targets.len(), 2);
+        assert!(
+            config
+                .announce_targets
+                .contains(&SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 255), 18081))
         );
     }
 }

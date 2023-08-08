@@ -11,7 +11,7 @@ pub use config::{
 };
 pub use discovery::{
     DISCOVERY_ANNOUNCE_INTERVAL_MS, DISCOVERY_PROBE_V1, DiscoverySocketConfig,
-    discovery_response_for_packet,
+    collect_discovery_broadcast_targets, discovery_response_for_packet,
 };
 pub use discovery_runtime::{DiscoveryRuntimeState, serve_discovery, serve_discovery_socket};
 pub use http::{MobileHttpResponse, MobileHttpState, handle_mobile_http_request};

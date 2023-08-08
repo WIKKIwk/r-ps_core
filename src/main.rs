@@ -6,7 +6,8 @@ use std::thread;
 use rp_scale::print::PrinterKind;
 use rp_scale::service::{
     DiscoveryRuntimeState, DiscoverySocketConfig, MobileHttpState, MobileServiceConfig,
-    ServiceIdentity, bind_mobile_http_listener, serve_discovery, serve_mobile_http,
+    ServiceIdentity, bind_mobile_http_listener, collect_discovery_broadcast_targets,
+    serve_discovery, serve_mobile_http,
 };
 
 fn main() {
@@ -34,7 +35,9 @@ fn serve() -> std::io::Result<()> {
     let http_state = MobileHttpState::from_config(&config, identity.clone(), active_printer);
     let discovery_state = DiscoveryRuntimeState::from_config(&config, identity);
 
-    let discovery_config = DiscoverySocketConfig::new(Ipv4Addr::UNSPECIFIED, 0, vec![]);
+    let discovery_targets = collect_discovery_broadcast_targets(0);
+    let discovery_config =
+        DiscoverySocketConfig::with_socket_targets(Ipv4Addr::UNSPECIFIED, 0, discovery_targets);
     thread::spawn(move || {
         if let Err(err) = serve_discovery(discovery_config, discovery_state) {
             eprintln!("rp-scale discovery warning: {err}");
