@@ -39,9 +39,8 @@ pub fn handle_mobile_http_stream(
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
 
-    let mut buf = [0_u8; 8192];
-    let n = stream.read(&mut buf)?;
-    let request = String::from_utf8_lossy(&buf[..n]);
+    let request_bytes = read_http_request(stream)?;
+    let request = String::from_utf8_lossy(&request_bytes);
 
     if let Some((method, path)) = parse_request_line(&request)
         && normalize_request_path(path) == MONITOR_STREAM_PATH
@@ -81,6 +80,59 @@ fn parse_body(raw: &str) -> &str {
         .or_else(|| raw.split_once("\n\n"))
         .map(|(_, body)| body)
         .unwrap_or("")
+}
+
+fn read_http_request(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
+    let mut request = Vec::with_capacity(8192);
+    let mut buf = [0_u8; 8192];
+    let n = stream.read(&mut buf)?;
+    request.extend_from_slice(&buf[..n]);
+
+    while header_end_offset(&request).is_none() {
+        let n = stream.read(&mut buf)?;
+        if n == 0 {
+            return Ok(request);
+        }
+        request.extend_from_slice(&buf[..n]);
+    }
+
+    let header_end = header_end_offset(&request).unwrap_or(request.len());
+    let content_length = content_length_from_headers(&request[..header_end]).unwrap_or(0);
+    let expected_len = header_end + content_length;
+    while request.len() < expected_len {
+        let n = stream.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        request.extend_from_slice(&buf[..n]);
+    }
+
+    Ok(request)
+}
+
+fn header_end_offset(raw: &[u8]) -> Option<usize> {
+    find_bytes(raw, b"\r\n\r\n")
+        .map(|index| index + 4)
+        .or_else(|| find_bytes(raw, b"\n\n").map(|index| index + 2))
+}
+
+fn content_length_from_headers(headers: &[u8]) -> Option<usize> {
+    let headers = String::from_utf8_lossy(headers);
+    for line in headers.lines().skip(1) {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case("content-length") {
+            return value.trim().parse::<usize>().ok();
+        }
+    }
+    None
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 fn parse_request_line(raw: &str) -> Option<(&str, &str)> {
@@ -338,5 +390,40 @@ mod tests {
 
         assert_eq!(response.status, 400);
         assert_eq!(body["error"], "bad_request");
+    }
+
+    #[test]
+    fn reads_delayed_body_by_content_length_before_routing() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            handle_mobile_http_stream(&mut stream, &state()).unwrap();
+        });
+
+        let body =
+            r#"{"epc":"EPC-1","item_code":"ITEM-1","warehouse":"Stores - A","gross_qty":1.25}"#;
+        let mut client = TcpStream::connect(addr).unwrap();
+        write!(
+            client,
+            "POST /v1/driver/print HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        thread::sleep(Duration::from_millis(50));
+        client.write_all(body.as_bytes()).unwrap();
+
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        server.join().unwrap();
+
+        assert!(
+            response.starts_with("HTTP/1.1 503 Service Unavailable"),
+            "{response}"
+        );
+        assert!(
+            response.contains("printer_executor_not_configured"),
+            "{response}"
+        );
     }
 }

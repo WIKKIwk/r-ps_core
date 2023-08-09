@@ -9,8 +9,8 @@ use rp_scale::scale::{SerialReader, SerialReaderConfig};
 use rp_scale::service::{
     DiscoveryRuntimeState, DiscoverySocketConfig, MobileHttpState, MobileServiceConfig,
     MonitorRuntimeState, ServiceIdentity, bind_mobile_http_listener, bonjour_config,
-    collect_discovery_broadcast_targets, register_bonjour_service, serve_discovery,
-    serve_mobile_http, simulated_executor_from_env,
+    collect_discovery_broadcast_targets, device_executor_from_env, parse_candidate_ports,
+    register_bonjour_service, serve_discovery, serve_mobile_http, simulated_executor_from_env,
 };
 
 fn main() {
@@ -28,12 +28,11 @@ fn main() {
 
 fn serve() -> std::io::Result<()> {
     let active_printer = active_printer_from_env();
-    let config = MobileServiceConfig::new(
-        "0.0.0.0",
-        &env::var("RP_SCALE_MOBILE_API_ADDR").unwrap_or_default(),
-        vec![],
-        &env::var("RP_SCALE_SERVER_NAME").unwrap_or_else(|_| "rp-scale".to_string()),
-    );
+    let listen_addr = env::var("RP_SCALE_MOBILE_API_ADDR").unwrap_or_default();
+    let candidate_ports = env::var("RP_SCALE_MOBILE_API_CANDIDATE_PORTS").unwrap_or_default();
+    let server_name = env::var("RP_SCALE_SERVER_NAME").unwrap_or_else(|_| "rp-scale".to_string());
+    let config =
+        mobile_service_config_from_env("0.0.0.0", &listen_addr, &candidate_ports, &server_name);
     let server_ref =
         env::var("RP_SCALE_SERVER_REF").unwrap_or_else(|_| config.default_server_ref());
     let identity = ServiceIdentity::new(&config.server_name, &server_ref, "RP Scale", "operator");
@@ -43,6 +42,14 @@ fn serve() -> std::io::Result<()> {
         MobileHttpState::from_config(&config, identity.clone(), active_printer, monitor);
     if let Ok(mode) = env::var("RP_SCALE_PRINT_EXECUTOR")
         && let Some(executor) = simulated_executor_from_env(&mode)
+    {
+        http_state = http_state.with_print_executor(Arc::new(executor));
+    } else if let Ok(mode) = env::var("RP_SCALE_PRINT_EXECUTOR")
+        && let Some(executor) = device_executor_from_env(
+            &mode,
+            env::var("RP_SCALE_ZEBRA_DEVICE").ok().as_deref(),
+            env::var("RP_SCALE_GODEX_DEVICE").ok().as_deref(),
+        )
     {
         http_state = http_state.with_print_executor(Arc::new(executor));
     }
@@ -82,6 +89,38 @@ fn active_printer_from_env() -> PrinterKind {
         .ok()
         .and_then(|value| PrinterKind::normalize_request(&value))
         .unwrap_or(PrinterKind::Zebra)
+}
+
+fn mobile_service_config_from_env(
+    listen_host: &str,
+    explicit_listen_addr: &str,
+    raw_candidate_ports: &str,
+    server_name: &str,
+) -> MobileServiceConfig {
+    let candidate_ports = if raw_candidate_ports.trim().is_empty() {
+        vec![]
+    } else {
+        parse_candidate_ports(raw_candidate_ports)
+    };
+    MobileServiceConfig::new(
+        listen_host,
+        explicit_listen_addr,
+        candidate_ports,
+        server_name,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_from_env_uses_candidate_ports_override() {
+        let config = mobile_service_config_from_env("127.0.0.1", "", "41000, 41001", "rp-test");
+
+        assert_eq!(config.candidate_ports, vec![41000, 41001]);
+        assert_eq!(config.server_name, "rp-test");
+    }
 }
 
 fn start_scale_reader_from_env(monitor: MonitorRuntimeState) {

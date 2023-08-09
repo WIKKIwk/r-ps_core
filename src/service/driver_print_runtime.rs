@@ -1,6 +1,12 @@
 use std::fmt;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::Mutex;
+use std::time::Duration;
 
-use crate::print::PrintExecutionResult;
+use crate::print::godex::{GodexExecutionError, GodexTransport};
+use crate::print::{PrintExecutionError, PrintExecutionResult, PrinterKind, ZebraTransport};
 use crate::runtime::PrintPipelineResult;
 
 pub trait DriverPrintExecutor: fmt::Debug + Send + Sync {
@@ -37,6 +43,116 @@ impl DriverPrintExecutor for SimulatedDriverPrintExecutor {
             status: "simulated".to_string(),
         })
     }
+}
+
+#[derive(Debug)]
+pub struct DeviceDriverPrintExecutor {
+    zebra_device: Option<PathBuf>,
+    godex_device: Option<PathBuf>,
+    lock: Mutex<()>,
+}
+
+impl DeviceDriverPrintExecutor {
+    pub fn new(zebra_device: Option<PathBuf>, godex_device: Option<PathBuf>) -> Self {
+        Self {
+            zebra_device,
+            godex_device,
+            lock: Mutex::new(()),
+        }
+    }
+}
+
+impl DriverPrintExecutor for DeviceDriverPrintExecutor {
+    fn execute(
+        &self,
+        prepared: &PrintPipelineResult,
+    ) -> Result<PrintExecutionResult, DriverPrintExecutionError> {
+        let _guard = self.lock.lock().map_err(|_| {
+            DriverPrintExecutionError::Failed("printer executor lock poisoned".to_string())
+        })?;
+
+        match prepared.plan.printer {
+            PrinterKind::Zebra => {
+                let device = self.zebra_device.as_ref().ok_or_else(|| {
+                    DriverPrintExecutionError::Unavailable(
+                        "zebra_device_not_configured".to_string(),
+                    )
+                })?;
+                let mut executor = crate::print::ZebraExecutor::new(FileZebraTransport {
+                    path: device.clone(),
+                });
+                crate::runtime::execute_prepared_print(&mut executor, prepared)
+                    .map_err(|err| DriverPrintExecutionError::Failed(err.to_string()))
+            }
+            PrinterKind::Godex => {
+                let device = self.godex_device.as_ref().ok_or_else(|| {
+                    DriverPrintExecutionError::Unavailable(
+                        "godex_device_not_configured".to_string(),
+                    )
+                })?;
+                let mut executor = crate::print::GodexExecutor::new(FileGodexTransport {
+                    path: device.clone(),
+                });
+                crate::runtime::execute_prepared_print(&mut executor, prepared)
+                    .map_err(|err| DriverPrintExecutionError::Failed(err.to_string()))
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct FileZebraTransport {
+    path: PathBuf,
+}
+
+impl ZebraTransport for FileZebraTransport {
+    fn send_zpl(&mut self, zpl: &str) -> Result<String, PrintExecutionError> {
+        write_device_payload(&self.path, zpl.as_bytes())
+            .map_err(|err| PrintExecutionError::Transport(err.to_string()))?;
+        Ok("sent".to_string())
+    }
+}
+
+#[derive(Debug)]
+struct FileGodexTransport {
+    path: PathBuf,
+}
+
+impl GodexTransport for FileGodexTransport {
+    fn send(
+        &mut self,
+        command: &str,
+        read: bool,
+        pause: Duration,
+    ) -> Result<String, GodexExecutionError> {
+        write_device_payload(&self.path, &encode_godex_command(command))
+            .map_err(|err| GodexExecutionError::new(err.to_string()))?;
+        if !pause.is_zero() {
+            std::thread::sleep(pause);
+        }
+        if read {
+            Ok("sent".to_string())
+        } else {
+            Ok(String::new())
+        }
+    }
+
+    fn write_raw(&mut self, payload: &[u8]) -> Result<(), GodexExecutionError> {
+        write_device_payload(&self.path, payload)
+            .map_err(|err| GodexExecutionError::new(err.to_string()))
+    }
+}
+
+fn write_device_payload(path: &PathBuf, payload: &[u8]) -> std::io::Result<()> {
+    let mut file = OpenOptions::new().append(true).open(path)?;
+    file.write_all(payload)?;
+    file.flush()
+}
+
+fn encode_godex_command(command: &str) -> Vec<u8> {
+    let mut out = command.trim_end_matches(['\r', '\n']).as_bytes().to_vec();
+    out.extend_from_slice(b"\r\n");
+    out
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -80,6 +196,27 @@ pub fn simulated_executor_from_env(value: &str) -> Option<SimulatedDriverPrintEx
         "simulated" | "simulate" | "dry-run" | "dry_run" => Some(SimulatedDriverPrintExecutor),
         _ => None,
     }
+}
+
+pub fn device_executor_from_env(
+    value: &str,
+    zebra_device: Option<&str>,
+    godex_device: Option<&str>,
+) -> Option<DeviceDriverPrintExecutor> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "real" | "device" | "hardware" => Some(DeviceDriverPrintExecutor::new(
+            normalize_device_path(zebra_device),
+            normalize_device_path(godex_device),
+        )),
+        _ => None,
+    }
+}
+
+fn normalize_device_path(value: Option<&str>) -> Option<PathBuf> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 #[cfg(test)]
@@ -133,5 +270,27 @@ mod tests {
         assert!(simulated_executor_from_env("simulate").is_some());
         assert!(simulated_executor_from_env("dry-run").is_some());
         assert!(simulated_executor_from_env("real").is_none());
+    }
+
+    #[test]
+    fn device_executor_writes_prepared_zebra_command_to_device_path() {
+        let path = std::env::temp_dir().join(format!("rp-scale-zebra-test-{}", std::process::id()));
+        std::fs::File::create(&path).unwrap();
+        let executor = DeviceDriverPrintExecutor::new(Some(path.clone()), None);
+
+        let result = executor.execute(&prepared()).unwrap();
+        let payload = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(result.printer, PrinterKind::Zebra);
+        assert_eq!(result.status, "sent");
+        assert!(payload.contains("^RFW,H,,,A^FD3034257BF7194E406994036B^FS"));
+    }
+
+    #[test]
+    fn real_executor_env_requires_matching_device_path() {
+        assert!(device_executor_from_env("real", Some("/tmp/zebra"), None).is_some());
+        assert!(device_executor_from_env("device", None, Some("/tmp/godex")).is_some());
+        assert!(device_executor_from_env("simulated", Some("/tmp/zebra"), None).is_none());
     }
 }

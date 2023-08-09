@@ -28,8 +28,9 @@ pub use driver_print_contract::{
     DriverPrintResponse,
 };
 pub use driver_print_runtime::{
-    DriverPrintExecutionError, DriverPrintExecutor, SimulatedDriverPrintExecutor,
-    UnconfiguredDriverPrintExecutor, simulated_executor_from_env,
+    DeviceDriverPrintExecutor, DriverPrintExecutionError, DriverPrintExecutor,
+    SimulatedDriverPrintExecutor, UnconfiguredDriverPrintExecutor, device_executor_from_env,
+    simulated_executor_from_env,
 };
 pub use http::{
     MobileHttpResponse, MobileHttpState, handle_mobile_http_request,
