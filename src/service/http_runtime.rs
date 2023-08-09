@@ -260,6 +260,32 @@ mod tests {
     }
 
     #[test]
+    fn routes_raw_items_request() {
+        let response = route_raw_http_request(
+            "GET /v1/mobile/items?query=a HTTP/1.1\r\nHost: localhost\r\n\r\n",
+            &state(),
+        );
+        let body = body_json(response.clone());
+
+        assert_eq!(response.status, 200);
+        assert_eq!(body["ok"], true);
+        assert!(body["items"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn routes_raw_item_warehouses_request() {
+        let response = route_raw_http_request(
+            "GET /v1/mobile/items/ITEM%201/warehouses HTTP/1.1\r\nHost: localhost\r\n\r\n",
+            &state(),
+        );
+        let body = body_json(response.clone());
+
+        assert_eq!(response.status, 200);
+        assert_eq!(body["item_code"], "ITEM 1");
+        assert!(body["warehouses"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
     fn builds_monitor_stream_snapshot_frame_like_gscale_sse() {
         let frame = monitor_stream_snapshot_frame(&state()).unwrap();
 

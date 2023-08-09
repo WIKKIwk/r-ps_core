@@ -26,7 +26,8 @@ pub use http_runtime::{
     bind_mobile_http_listener, handle_mobile_http_stream, route_raw_http_request, serve_mobile_http,
 };
 pub use mobile_contract::{
-    APP_ID, ActivePrinterResponse, DiscoveryAnnouncement, HandshakeResponse, HealthResponse,
+    APP_ID, ActivePrinterResponse, DiscoveryAnnouncement, EmptyArchiveResponse, EmptyItemsResponse,
+    EmptyWarehousesResponse, HandshakeResponse, HealthResponse, ItemWarehousesResponse,
     PrinterCapabilitiesResponse, PrinterCapabilityFlagsResponse, SERVICE_ID, ServiceIdentity,
     SetupStatusResponse,
 };

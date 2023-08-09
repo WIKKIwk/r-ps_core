@@ -196,6 +196,68 @@ impl SetupStatusResponse {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct EmptyItemsResponse {
+    pub ok: bool,
+    pub items: Vec<serde_json::Value>,
+}
+
+impl EmptyItemsResponse {
+    pub fn driver_scope() -> Self {
+        Self {
+            ok: true,
+            items: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct EmptyWarehousesResponse {
+    pub ok: bool,
+    pub warehouses: Vec<serde_json::Value>,
+}
+
+impl EmptyWarehousesResponse {
+    pub fn driver_scope() -> Self {
+        Self {
+            ok: true,
+            warehouses: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ItemWarehousesResponse {
+    pub ok: bool,
+    pub item_code: String,
+    pub warehouses: Vec<serde_json::Value>,
+}
+
+impl ItemWarehousesResponse {
+    pub fn driver_scope(item_code: &str) -> Self {
+        Self {
+            ok: true,
+            item_code: item_code.to_string(),
+            warehouses: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct EmptyArchiveResponse {
+    pub ok: bool,
+    pub archive: Vec<serde_json::Value>,
+}
+
+impl EmptyArchiveResponse {
+    pub fn driver_scope() -> Self {
+        Self {
+            ok: true,
+            archive: Vec::new(),
+        }
+    }
+}
+
 fn normalize(value: &str, fallback: &str) -> String {
     match value.trim() {
         "" => fallback.to_string(),
@@ -283,5 +345,21 @@ mod tests {
         assert!(!status.erp_read_configured);
         assert!(!status.batch_actions_ready);
         assert_eq!(status.warehouse_mode, "manual");
+    }
+
+    #[test]
+    fn catalog_and_archive_stubs_are_empty_driver_scope_lists() {
+        assert!(EmptyItemsResponse::driver_scope().items.is_empty());
+        assert!(
+            EmptyWarehousesResponse::driver_scope()
+                .warehouses
+                .is_empty()
+        );
+        assert!(
+            ItemWarehousesResponse::driver_scope("ITEM-1")
+                .warehouses
+                .is_empty()
+        );
+        assert!(EmptyArchiveResponse::driver_scope().archive.is_empty());
     }
 }

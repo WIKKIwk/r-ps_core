@@ -2,7 +2,8 @@ use serde::Serialize;
 
 use super::config::MobileServiceConfig;
 use super::mobile_contract::{
-    HandshakeResponse, HealthResponse, PrinterCapabilitiesResponse, ServiceIdentity,
+    EmptyArchiveResponse, EmptyItemsResponse, EmptyWarehousesResponse, HandshakeResponse,
+    HealthResponse, ItemWarehousesResponse, PrinterCapabilitiesResponse, ServiceIdentity,
     SetupStatusResponse,
 };
 use super::monitor_contract::BatchStateResponse;
@@ -121,6 +122,22 @@ pub fn handle_mobile_http_request(
         ("GET", "/v1/mobile/setup/status") => {
             MobileHttpResponse::json(200, &SetupStatusResponse::driver_scope())
         }
+        ("POST", "/v1/mobile/setup/warehouse") => {
+            MobileHttpResponse::json(200, &SetupStatusResponse::driver_scope())
+        }
+        ("GET", "/v1/mobile/items") => {
+            MobileHttpResponse::json(200, &EmptyItemsResponse::driver_scope())
+        }
+        ("GET", "/v1/mobile/warehouses") => {
+            MobileHttpResponse::json(200, &EmptyWarehousesResponse::driver_scope())
+        }
+        ("GET", "/v1/mobile/archive") => {
+            MobileHttpResponse::json(200, &EmptyArchiveResponse::driver_scope())
+        }
+        ("GET", path) if is_item_warehouses_path(path) => {
+            let item_code = extract_item_code_from_warehouses_path(path).unwrap_or_default();
+            MobileHttpResponse::json(200, &ItemWarehousesResponse::driver_scope(&item_code))
+        }
         ("GET", "/v1/mobile/batch/state") => {
             MobileHttpResponse::json(200, &BatchStateResponse::inactive(state.active_printer))
         }
@@ -129,6 +146,10 @@ pub fn handle_mobile_http_request(
         | (_, "/v1/mobile/printer/capabilities")
         | (_, "/v1/mobile/monitor/state")
         | (_, "/v1/mobile/setup/status")
+        | (_, "/v1/mobile/setup/warehouse")
+        | (_, "/v1/mobile/items")
+        | (_, "/v1/mobile/warehouses")
+        | (_, "/v1/mobile/archive")
         | (_, "/v1/mobile/batch/state") => MobileHttpResponse::json(
             405,
             &MobileHttpErrorResponse {
@@ -137,6 +158,39 @@ pub fn handle_mobile_http_request(
         ),
         _ => MobileHttpResponse::json(404, &MobileHttpErrorResponse { error: "not_found" }),
     }
+}
+
+fn is_item_warehouses_path(path: &str) -> bool {
+    extract_item_code_from_warehouses_path(path).is_some()
+}
+
+fn extract_item_code_from_warehouses_path(path: &str) -> Option<String> {
+    let rest = path.strip_prefix("/v1/mobile/items/")?;
+    let (item_code, suffix) = rest.rsplit_once('/')?;
+    if suffix != "warehouses" || item_code.trim().is_empty() {
+        return None;
+    }
+    Some(percent_decode(item_code))
+}
+
+fn percent_decode(value: &str) -> String {
+    let mut out = Vec::with_capacity(value.len());
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let Ok(hex) = std::str::from_utf8(&bytes[index + 1..index + 3])
+            && let Ok(decoded) = u8::from_str_radix(hex, 16)
+        {
+            out.push(decoded);
+            index += 3;
+            continue;
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn normalize_path(path: &str) -> String {
@@ -271,6 +325,58 @@ mod tests {
         assert_eq!(body["batch"]["print_mode"], "label");
         assert_eq!(body["batch"]["quantity_source"], "scale");
         assert_eq!(body["batch"]["total_qty"], 0.0);
+    }
+
+    #[test]
+    fn catalog_endpoints_return_empty_driver_scope_lists() {
+        let items = json(handle_mobile_http_request(
+            &state(PrinterKind::Godex),
+            "GET",
+            "/v1/mobile/items?query=a",
+        ));
+        let warehouses = json(handle_mobile_http_request(
+            &state(PrinterKind::Godex),
+            "GET",
+            "/v1/mobile/warehouses?query=w",
+        ));
+        let archive = json(handle_mobile_http_request(
+            &state(PrinterKind::Godex),
+            "GET",
+            "/v1/mobile/archive?limit=50",
+        ));
+
+        assert_eq!(items["ok"], true);
+        assert_eq!(items["items"].as_array().unwrap().len(), 0);
+        assert_eq!(warehouses["ok"], true);
+        assert_eq!(warehouses["warehouses"].as_array().unwrap().len(), 0);
+        assert_eq!(archive["ok"], true);
+        assert_eq!(archive["archive"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn item_warehouses_endpoint_returns_empty_driver_scope_list() {
+        let body = json(handle_mobile_http_request(
+            &state(PrinterKind::Godex),
+            "GET",
+            "/v1/mobile/items/ITEM%201/warehouses?limit=12",
+        ));
+
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["item_code"], "ITEM 1");
+        assert_eq!(body["warehouses"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn warehouse_setup_post_returns_driver_scope_setup_status() {
+        let body = json(handle_mobile_http_request(
+            &state(PrinterKind::Godex),
+            "POST",
+            "/v1/mobile/setup/warehouse",
+        ));
+
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["warehouse_mode"], "manual");
+        assert_eq!(body["batch_actions_ready"], false);
     }
 
     #[test]
