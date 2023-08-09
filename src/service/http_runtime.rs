@@ -1,8 +1,13 @@
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use super::http::{MobileHttpResponse, MobileHttpState, handle_mobile_http_request};
+
+const MONITOR_STREAM_PATH: &str = "/v1/mobile/monitor/stream";
+const MONITOR_STREAM_TICK: Duration = Duration::from_millis(350);
+const MONITOR_STREAM_HEARTBEAT: Duration = Duration::from_secs(15);
 
 pub fn bind_mobile_http_listener(addr: &str) -> io::Result<TcpListener> {
     let listener = TcpListener::bind(addr)?;
@@ -13,8 +18,12 @@ pub fn bind_mobile_http_listener(addr: &str) -> io::Result<TcpListener> {
 pub fn serve_mobile_http(listener: TcpListener, state: MobileHttpState) -> io::Result<()> {
     for stream in listener.incoming() {
         match stream {
-            Ok(mut stream) => {
-                let _ = handle_mobile_http_stream(&mut stream, &state);
+            Ok(stream) => {
+                let state = state.clone();
+                thread::spawn(move || {
+                    let mut stream = stream;
+                    let _ = handle_mobile_http_stream(&mut stream, &state);
+                });
             }
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(err) => return Err(err),
@@ -33,6 +42,24 @@ pub fn handle_mobile_http_stream(
     let mut buf = [0_u8; 8192];
     let n = stream.read(&mut buf)?;
     let request = String::from_utf8_lossy(&buf[..n]);
+
+    if let Some((method, path)) = parse_request_line(&request)
+        && normalize_request_path(path) == MONITOR_STREAM_PATH
+    {
+        if method.trim().eq_ignore_ascii_case("GET") {
+            return write_monitor_stream_response(stream, state);
+        }
+        return write_http_response(
+            stream,
+            &MobileHttpResponse::json(
+                405,
+                &super::http::MobileHttpErrorResponse {
+                    error: "method_not_allowed",
+                },
+            ),
+        );
+    }
+
     let response = route_raw_http_request(&request, state);
     write_http_response(stream, &response)
 }
@@ -57,12 +84,74 @@ fn parse_request_line(raw: &str) -> Option<(&str, &str)> {
     Some((method, path))
 }
 
+fn normalize_request_path(path: &str) -> String {
+    let path = path.trim();
+    let path = path.split_once('?').map(|(path, _)| path).unwrap_or(path);
+    match path {
+        "" => "/".to_string(),
+        value if value.starts_with('/') => value.to_string(),
+        value => format!("/{value}"),
+    }
+}
+
+fn write_monitor_stream_response(
+    stream: &mut TcpStream,
+    state: &MobileHttpState,
+) -> io::Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\n\r\n"
+    )?;
+    stream.write_all(b": connected\n\n")?;
+    stream.flush()?;
+
+    let mut last_payload = Vec::new();
+    let mut last_heartbeat = Instant::now();
+    loop {
+        let frame = monitor_stream_snapshot_frame(state)?;
+        if frame.payload != last_payload {
+            last_payload = frame.payload;
+            stream.write_all(frame.text.as_bytes())?;
+            stream.flush()?;
+        }
+
+        if last_heartbeat.elapsed() >= MONITOR_STREAM_HEARTBEAT {
+            stream.write_all(b": ping\n\n")?;
+            stream.flush()?;
+            last_heartbeat = Instant::now();
+        }
+
+        thread::sleep(MONITOR_STREAM_TICK);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SseFrame {
+    text: String,
+    payload: Vec<u8>,
+}
+
+fn monitor_stream_snapshot_frame(state: &MobileHttpState) -> io::Result<SseFrame> {
+    let payload = serde_json::to_vec(
+        &state
+            .monitor
+            .snapshot(&state.identity, state.active_printer),
+    )
+    .map_err(io::Error::other)?;
+    let text = format!(
+        "event: snapshot\ndata: {}\n\n",
+        String::from_utf8_lossy(&payload)
+    );
+    Ok(SseFrame { text, payload })
+}
+
 fn write_http_response(stream: &mut TcpStream, response: &MobileHttpResponse) -> io::Result<()> {
     let status_text = match response.status {
         200 => "OK",
         400 => "Bad Request",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        500 => "Internal Server Error",
         _ => "OK",
     };
     write!(
@@ -140,6 +229,25 @@ mod tests {
         assert_eq!(body["ok"], true);
         assert_eq!(body["state"]["batch"]["active"], false);
         assert_eq!(body["state"]["print_request"]["status"], "idle");
+    }
+
+    #[test]
+    fn builds_monitor_stream_snapshot_frame_like_gscale_sse() {
+        let frame = monitor_stream_snapshot_frame(&state()).unwrap();
+
+        assert!(frame.text.starts_with("event: snapshot\ndata: "));
+        assert!(frame.text.ends_with("\n\n"));
+        assert!(frame.text.contains(r#""ok":true"#));
+        assert!(frame.text.contains(r#""state":"#));
+        assert!(!frame.payload.is_empty());
+    }
+
+    #[test]
+    fn normalizes_monitor_stream_path_with_query() {
+        assert_eq!(
+            normalize_request_path("/v1/mobile/monitor/stream?x=1"),
+            MONITOR_STREAM_PATH
+        );
     }
 
     #[test]
