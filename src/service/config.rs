@@ -35,6 +35,10 @@ impl MobileServiceConfig {
     pub fn http_port(&self) -> u16 {
         port_from_listen_addr(&self.listen_addr).unwrap_or_else(default_mobile_api_port)
     }
+
+    pub fn default_server_ref(&self) -> String {
+        server_ref_for_port(&self.server_name, self.http_port(), &self.candidate_ports)
+    }
 }
 
 pub fn default_mobile_api_port() -> u16 {
@@ -84,6 +88,16 @@ pub fn port_from_listen_addr(addr: &str) -> Option<u16> {
     addr.rsplit_once(':')
         .and_then(|(_, port)| port.parse::<u16>().ok())
         .filter(|port| *port > 0)
+}
+
+pub fn server_ref_for_port(server_name: &str, http_port: u16, candidate_ports: &[u16]) -> String {
+    let server_name = normalize_server_name(server_name);
+    let suffix = candidate_ports
+        .iter()
+        .position(|port| *port == http_port)
+        .map(|index| index + 1)
+        .unwrap_or(http_port as usize);
+    format!("{server_name}_{suffix}")
 }
 
 fn normalize_candidate_ports(mut candidate_ports: Vec<u16>) -> Vec<u16> {
@@ -164,5 +178,22 @@ mod tests {
         assert_eq!(cfg.discovery_addr, "0.0.0.0:18081");
         assert_eq!(cfg.server_name, "gscale-zebra");
         assert_eq!(cfg.candidate_ports, DEFAULT_MOBILE_API_PORTS);
+        assert_eq!(cfg.default_server_ref(), "gscale-zebra_2");
+    }
+
+    #[test]
+    fn builds_indexed_server_ref_from_selected_candidate_port() {
+        assert_eq!(
+            server_ref_for_port("rps", 39117, DEFAULT_MOBILE_API_PORTS),
+            "rps_1"
+        );
+        assert_eq!(
+            server_ref_for_port("rps", 41257, DEFAULT_MOBILE_API_PORTS),
+            "rps_2"
+        );
+        assert_eq!(
+            server_ref_for_port("rps", 18000, DEFAULT_MOBILE_API_PORTS),
+            "rps_18000"
+        );
     }
 }

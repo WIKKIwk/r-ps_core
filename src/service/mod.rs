@@ -12,7 +12,7 @@ pub use bonjour::{
 };
 pub use config::{
     DEFAULT_DISCOVERY_PORT, DEFAULT_MOBILE_API_PORTS, MobileServiceConfig, default_mobile_api_port,
-    parse_candidate_ports, select_listen_addr,
+    parse_candidate_ports, select_listen_addr, server_ref_for_port,
 };
 pub use discovery::{
     DISCOVERY_ANNOUNCE_INTERVAL_MS, DISCOVERY_PROBE_V1, DiscoverySocketConfig,

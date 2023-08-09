@@ -32,7 +32,9 @@ fn serve() -> std::io::Result<()> {
         vec![],
         &env::var("RP_SCALE_SERVER_NAME").unwrap_or_else(|_| "rp-scale".to_string()),
     );
-    let identity = ServiceIdentity::new(&config.server_name, "rp-scale", "RP Scale", "operator");
+    let server_ref =
+        env::var("RP_SCALE_SERVER_REF").unwrap_or_else(|_| config.default_server_ref());
+    let identity = ServiceIdentity::new(&config.server_name, &server_ref, "RP Scale", "operator");
     let http_state = MobileHttpState::from_config(&config, identity.clone(), active_printer);
     let discovery_state = DiscoveryRuntimeState::from_config(&config, identity.clone());
     let _bonjour = match register_bonjour_service(&bonjour_config(
