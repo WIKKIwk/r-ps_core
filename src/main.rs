@@ -36,7 +36,10 @@ fn serve() -> std::io::Result<()> {
     let server_ref =
         env::var("RP_SCALE_SERVER_REF").unwrap_or_else(|_| config.default_server_ref());
     let identity = ServiceIdentity::new(&config.server_name, &server_ref, "RP Scale", "operator");
-    let monitor = MonitorRuntimeState::default();
+    let monitor = MonitorRuntimeState::with_printer_devices(
+        env::var("RP_SCALE_ZEBRA_DEVICE").ok(),
+        env::var("RP_SCALE_GODEX_DEVICE").ok(),
+    );
     start_scale_reader_from_env(monitor.clone());
     let mut http_state =
         MobileHttpState::from_config(&config, identity.clone(), active_printer, monitor);

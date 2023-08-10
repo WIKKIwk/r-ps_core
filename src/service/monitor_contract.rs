@@ -27,6 +27,15 @@ impl MonitorResponse {
         batch: BatchSnapshot,
     ) -> Self {
         let printer = MonitorPrinter::disconnected(active_printer);
+        Self::driver_idle_with_printer(identity, active_printer, batch, printer)
+    }
+
+    pub fn driver_idle_with_printer(
+        identity: &ServiceIdentity,
+        _active_printer: PrinterKind,
+        batch: BatchSnapshot,
+        printer: MonitorPrinter,
+    ) -> Self {
         Self {
             ok: true,
             profile: MonitorProfile::from_identity(identity),
@@ -55,6 +64,16 @@ impl MonitorResponse {
         batch: BatchSnapshot,
     ) -> Self {
         let printer = MonitorPrinter::disconnected(active_printer);
+        Self::driver_with_scale_and_printer(identity, active_printer, reading, batch, printer)
+    }
+
+    pub fn driver_with_scale_and_printer(
+        identity: &ServiceIdentity,
+        _active_printer: PrinterKind,
+        reading: &Reading,
+        batch: BatchSnapshot,
+        printer: MonitorPrinter,
+    ) -> Self {
         Self {
             ok: true,
             profile: MonitorProfile::from_identity(identity),
@@ -225,7 +244,19 @@ pub struct MonitorPrinter {
 }
 
 impl MonitorPrinter {
-    fn disconnected(active_printer: PrinterKind) -> Self {
+    pub fn connected(active_printer: PrinterKind, device_path: String) -> Self {
+        Self {
+            ok: true,
+            connected: true,
+            kind: active_printer.as_str().to_string(),
+            label: "ulangan".to_string(),
+            device_paths: vec![device_path],
+            error: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    pub fn disconnected(active_printer: PrinterKind) -> Self {
         Self {
             ok: false,
             connected: false,
@@ -234,6 +265,13 @@ impl MonitorPrinter {
             device_paths: Vec::new(),
             error: String::new(),
             updated_at: String::new(),
+        }
+    }
+
+    pub fn disconnected_with_error(active_printer: PrinterKind, error: String) -> Self {
+        Self {
+            error,
+            ..Self::disconnected(active_printer)
         }
     }
 }
