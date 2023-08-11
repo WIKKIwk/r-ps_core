@@ -17,12 +17,12 @@ pub struct PackLabelContent {
 pub fn build_pack_label_content(
     job: &CorePrintJob,
     company_name: &str,
-    default_brutto_text: &str,
+    _default_brutto_text: &str,
 ) -> Result<PackLabelContent, String> {
     let company_name = uppercase_clean(company_name);
     let product_name = uppercase_clean(product_name_or_epc(job));
     let kg_text = normalize_kg_value(&job.net_qty.to_string());
-    let brutto_text = normalize_brutto_text(default_brutto_text, job);
+    let brutto_text = normalize_brutto_text(job);
     let epc = uppercase_clean(&job.epc);
 
     if company_name.is_empty() || product_name.is_empty() || kg_text.is_empty() || epc.is_empty() {
@@ -64,16 +64,11 @@ fn product_name_or_epc(job: &CorePrintJob) -> &str {
     }
 }
 
-fn normalize_brutto_text(default_brutto_text: &str, job: &CorePrintJob) -> String {
+fn normalize_brutto_text(job: &CorePrintJob) -> String {
     if job.tare {
         return normalize_kg_value(&job.gross_qty.to_string());
     }
-    let brutto = normalize_kg_value(default_brutto_text);
-    if brutto.is_empty() {
-        "5".to_string()
-    } else {
-        brutto
-    }
+    normalize_kg_value(&job.net_qty.to_string())
 }
 
 fn uppercase_clean(value: &str) -> String {
@@ -166,11 +161,11 @@ mod tests {
         assert_eq!(content.company_name, "ACCORD LLC");
         assert_eq!(content.product_name, "GREEN TEA");
         assert_eq!(content.kg_text, "1.3");
-        assert_eq!(content.brutto_text, "5");
+        assert_eq!(content.brutto_text, content.kg_text);
         assert_eq!(content.epc, "3034257BF7194E406994036B");
         assert_eq!(
             content.qr_payload,
-            "https://scan.wspace.sbs/L/ACCORD+LLC/GREEN+TEA/1.3/5/3034257BF7194E406994036B"
+            "https://scan.wspace.sbs/L/ACCORD+LLC/GREEN+TEA/1.3/1.3/3034257BF7194E406994036B"
         );
     }
 
@@ -190,7 +185,7 @@ mod tests {
         let content = build_pack_label_content(&job, "Accord", "").unwrap();
 
         assert_eq!(content.product_name, "3034257BF7194E406994036B");
-        assert_eq!(content.brutto_text, "5");
+        assert_eq!(content.brutto_text, content.kg_text);
     }
 
     #[test]

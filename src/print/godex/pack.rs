@@ -150,7 +150,7 @@ mod tests {
         );
         assert_eq!(
             render.qr_payload,
-            "https://scan.wspace.sbs/L/ACCORD+LLC/GREEN+TEA/1.3/5/3034257BF7194E406994036B"
+            "https://scan.wspace.sbs/L/ACCORD+LLC/GREEN+TEA/1.3/1.3/3034257BF7194E406994036B"
         );
         assert_eq!(render.qr_box_dots, 144);
         assert_eq!(&render.text_graphic_bmp[0..2], b"BM");
